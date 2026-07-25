@@ -1,0 +1,33 @@
+#!/bin/bash
+# Turn the Finder extension on for the person who ran the installer.
+#
+# macOS does not auto-enable third-party Finder extensions, and without this the
+# app installs to a menu that never appears. The installer runs as root, but
+# extension enablement is per-user state, so everything here is hopped back to the
+# console user.
+#
+# Nothing in here is allowed to fail the install: the app works from the CLI and
+# by double-click regardless, and System Settings can always enable it by hand.
+
+APPEX="/Applications/fingerlock.app/Contents/PlugIns/FingerlockFinder.appex"
+BUNDLE_ID="com.jvs.fingerlock.FingerlockFinder"
+
+CONSOLE_USER=$(/usr/bin/stat -f "%Su" /dev/console 2>/dev/null)
+if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
+	exit 0
+fi
+CONSOLE_UID=$(/usr/bin/id -u "$CONSOLE_USER" 2>/dev/null) || exit 0
+
+as_user() {
+	/bin/launchctl asuser "$CONSOLE_UID" /usr/bin/sudo -u "$CONSOLE_USER" "$@"
+}
+
+# Let LaunchServices see the app, so the .fingerlock type and the fingerlock://
+# scheme are claimed without waiting for a rescan.
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+[ -x "$LSREGISTER" ] && as_user "$LSREGISTER" -f -R /Applications/fingerlock.app 2>/dev/null
+
+as_user /usr/bin/pluginkit -a "$APPEX" 2>/dev/null
+as_user /usr/bin/pluginkit -e use -i "$BUNDLE_ID" 2>/dev/null
+
+exit 0

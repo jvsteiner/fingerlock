@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+	<title>Fingerlock</title>
+	<organization>com.jvs</organization>
+
+	<!-- System-wide only. The Finder extension has to live somewhere Finder will
+	     load it from, and a home-directory install makes that unreliable. -->
+	<domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+
+	<options customize="never" require-scripts="true" hostArchitectures="arm64,x86_64"/>
+
+	<volume-check>
+		<allowed-os-versions>
+			<os-version min="13.0"/>
+		</allowed-os-versions>
+	</volume-check>
+
+	<license file="LICENSE.txt"/>
+	<readme file="README.html"/>
+
+	<choices-outline>
+		<line choice="default">
+			<line choice="com.jvs.fingerlock"/>
+		</line>
+	</choices-outline>
+	<choice id="default"/>
+	<choice id="com.jvs.fingerlock" visible="false">
+		<pkg-ref id="com.jvs.fingerlock"/>
+	</choice>
+	<!-- Filename must match what build-pkg.sh hands to pkgbuild. -->
+	<pkg-ref id="com.jvs.fingerlock" onConclusion="none">fingerlock-component.pkg</pkg-ref>
+</installer-gui-script>

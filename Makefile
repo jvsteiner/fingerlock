@@ -45,6 +45,14 @@ test:
 	swift build
 	./scripts/test-crypto.sh
 
+# Signed, notarized installer. VERSION is required; see scripts/build-pkg.sh for
+# the one-time notarytool credential setup.
+#   make pkg VERSION=0.1.0
+#   make pkg VERSION=0.1.0 SKIP_NOTARIZE=1   # local check, no Apple round-trip
+pkg:
+	@test -n "$(VERSION)" || { echo "usage: make pkg VERSION=0.1.0"; exit 1; }
+	SKIP_NOTARIZE=$(SKIP_NOTARIZE) ./scripts/build-pkg.sh $(VERSION)
+
 uninstall:
 	rm -f $(PREFIX)/fingerlock
 	rm -rf "$(APPS)/fingerlock.app"
