@@ -65,9 +65,18 @@ EOF
 fi
 
 say "Building the app"
-# So the installed app reports the release version rather than whatever is pinned
-# in the project file.
+# From clean. A MARKETING_VERSION override does not force Info.plist processing to
+# re-run: with warm derived data Xcode treats the step as up to date and ships the
+# previous value. 0.2.2 went out reporting 1.0 for exactly that reason.
+rm -rf "$DERIVED"
 make app DERIVED="$DERIVED" MARKETING_VERSION="$VERSION"
+
+built_version=$(defaults read "$(pwd)/$APP/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "")
+[ "$built_version" = "$VERSION" ] || {
+	echo "app reports version '$built_version', expected '$VERSION'" >&2
+	exit 1
+}
+echo "    version: $built_version"
 
 say "Checking the app is signed the way the installer will claim"
 codesign -v --deep --strict "$APP"
