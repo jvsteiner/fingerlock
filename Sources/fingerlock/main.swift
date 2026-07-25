@@ -191,6 +191,15 @@ func cmdResetKey() throws {
 var args = Array(CommandLine.arguments.dropFirst())
 let keep = args.contains("--keep")
 args.removeAll { $0 == "--keep" }
+// LaunchServices sometimes tacks a process-serial-number argument on.
+args.removeAll { $0.hasPrefix("-psn_") }
+
+// No arguments and no terminal means Finder launched us — double-clicked a sealed
+// file, or the Finder extension opened a fingerlock:// URL. Hand over to AppKit so
+// the open-documents event can arrive. From a shell, keep printing usage.
+if args.isEmpty && isatty(STDIN_FILENO) == 0 {
+    runAsApp()
+}
 
 guard let command = args.first else {
     print(usage)
