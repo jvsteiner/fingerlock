@@ -279,6 +279,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = fingerlock.entitlements;
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				OTHER_CODE_SIGN_FLAGS = "--timestamp";
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				DEVELOPMENT_TEAM = X3U2KY97YV;
@@ -298,6 +299,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = fingerlock.entitlements;
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				OTHER_CODE_SIGN_FLAGS = "--timestamp";
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				DEVELOPMENT_TEAM = X3U2KY97YV;
@@ -318,6 +320,7 @@
 				CODE_SIGN_ENTITLEMENTS = FingerlockFinder.entitlements;
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				OTHER_CODE_SIGN_FLAGS = "--timestamp";
 				CODE_SIGN_STYLE = Manual;
 				DEVELOPMENT_TEAM = X3U2KY97YV;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -341,6 +344,7 @@
 				CODE_SIGN_ENTITLEMENTS = FingerlockFinder.entitlements;
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				OTHER_CODE_SIGN_FLAGS = "--timestamp";
 				CODE_SIGN_STYLE = Manual;
 				DEVELOPMENT_TEAM = X3U2KY97YV;
 				ENABLE_HARDENED_RUNTIME = YES;

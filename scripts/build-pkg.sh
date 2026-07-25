@@ -68,17 +68,53 @@ make app
 
 say "Checking the app is signed the way the installer will claim"
 codesign -v --deep --strict "$APP"
-codesign -d --entitlements - "$APP" 2>/dev/null | grep -q keychain-access-groups \
-	|| { echo "app is missing the keychain entitlement — the Enclave will not work" >&2; exit 1; }
-codesign -d --entitlements - "$APP" 2>/dev/null | grep -q get-task-allow \
-	&& { echo "app has get-task-allow — refusing to ship a debuggable build" >&2; exit 1; }
+
+# Deliberately no pipes here. `codesign | grep -q` looks fine and is a trap: grep
+# closes the pipe on its first match, codesign dies of SIGPIPE, and pipefail then
+# reports the whole check as failed — so a correctly signed app looks broken.
+entitlements=$(codesign -d --entitlements - "$APP" 2>/dev/null || true)
+case "$entitlements" in
+	*keychain-access-groups*) ;;
+	*) echo "app is missing the keychain entitlement — the Enclave will not work" >&2; exit 1 ;;
+esac
+case "$entitlements" in
+	*get-task-allow*) echo "app has get-task-allow — refusing to ship a debuggable build" >&2; exit 1 ;;
+esac
+
+# Xcode's `build` action signs with --timestamp=none, which notarization rejects.
+# OTHER_CODE_SIGN_FLAGS overrides it, but that is easy to lose in a project edit and
+# the failure otherwise surfaces minutes later as an Apple rejection.
+for binary in "$APP" "$APP/Contents/PlugIns/FingerlockFinder.appex"; do
+	sig=$(codesign -dvv "$binary" 2>&1 || true)
+	case $'\n'"$sig" in
+		*$'\n'Timestamp=*) ;;
+		*) echo "$(basename "$binary") has no secure timestamp — notarization would reject it. Check OTHER_CODE_SIGN_FLAGS = --timestamp." >&2; exit 1 ;;
+	esac
+done
 
 notarize() { # $1 = path to submit
 	if [ "$SKIP_NOTARIZE" = "1" ]; then
 		echo "SKIP_NOTARIZE=1 — not submitting $1"
 		return 0
 	fi
-	xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait
+
+	# `notarytool submit --wait` exits 0 even when Apple rejects the submission,
+	# so the status has to be read out of the output. Otherwise the build sails on
+	# and fails later at stapling, which says nothing about what was wrong.
+	local out id status
+	out=$(xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1)
+	echo "$out"
+
+	status=$(printf '%s\n' "$out" | awk '/^ *status:/ {print $2; exit}')
+	if [ "$status" != "Accepted" ]; then
+		id=$(printf '%s\n' "$out" | awk '/^ *id:/ {print $2; exit}')
+		echo "" >&2
+		echo "Notarization failed (status: ${status:-unknown}). Apple's reasons:" >&2
+		if [ -n "$id" ]; then
+			xcrun notarytool log "$id" --keychain-profile "$NOTARY_PROFILE" >&2 || true
+		fi
+		return 1
+	fi
 }
 
 say "Notarizing the app"
