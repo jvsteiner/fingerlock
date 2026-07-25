@@ -1,0 +1,6 @@
+.build/
+DerivedData/
+*.fingerlock
+*.provisionprofile
+xcuserdata/
+.DS_Store
