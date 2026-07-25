@@ -1,111 +1,26 @@
 # fingerlock
 
-Seal a file from Finder's right-click menu; open it with a fingerprint.
+Seal a file from Finder's right-click menu. Open it with your fingerprint.
 
-The file key is random per file and wrapped twice — once by a Secure Enclave key
-that only a live Touch ID match can use, once by a recovery key you hold a
-passphrase for. Sealing needs no fingerprint (it's a public-key operation, so it's
-instant and silent). Unsealing does.
+macOS has no built-in way to encrypt a single file. Disk images work but are
+passphrase-based and clumsy for one document. Fingerlock adds a right-click item that
+encrypts a file in place, and gives it back when the Secure Enclave sees your finger.
 
-## Status
+Early days — it works, and the file format may still change before 1.0.
 
-Built, signed, installed, and launching. Run `fingerlock init` to create your keys.
+## How it works
 
-| Piece | State |
-|---|---|
-| Envelope format, AES-GCM, tamper detection | done — `make test`, 12/12 |
-| Recovery key + passphrase escrow | done — covered by the same tests |
-| CLI | done |
-| Finder Quick Action | done — registers and runs |
-| Signing, profile, entitlements | done — see [Signing](#signing) |
-| Double-click a sealed file to unseal | done |
-| Top-level Finder menu item (FinderSync) | built, enabled, loads — menu click not yet exercised |
-| Touch ID seal/unseal from the CLI | working |
+Each file gets its own random AES-256-GCM key. That key is wrapped twice:
 
-## Signing
+- **To a Secure Enclave key**, created with `.biometryCurrentSet` and
+  `.privateKeyUsage`. The private half is generated inside the Enclave and never
+  leaves it. Using it requires a live Touch ID match — the check is enforced by the
+  hardware, not by this code.
+- **To an X25519 recovery key**, whose private half is encrypted under a passphrase
+  you choose (PBKDF2-SHA256, 600,000 iterations) in `~/.config/fingerlock/config.json`.
 
-A bare, ad-hoc-signed binary cannot use the Secure Enclave or a biometry-gated
-keychain item — it fails with `-34018`. Reaching them needs a `keychain-access-groups`
-entitlement, and that entitlement needs a provisioning profile to authorize it.
-Measured on macOS 15.7.7:
-
-| Signing | Result |
-|---|---|
-| ad-hoc (`codesign -s -`) | runs; Enclave calls fail `-34018` |
-| Developer ID, no entitlements | runs; Enclave calls fail `-34018` |
-| Developer ID + `keychain-access-groups`, no profile | **process never reaches `main`** |
-| same, wrapped in an `.app` bundle, no profile | **process never reaches `main`** |
-
-That last state is a stuck exec, not a crash — `ps` shows `UE` with zero bytes of
-output. The kernel refuses to launch a binary claiming a restricted entitlement it
-cannot validate. This is also why the project builds an `.app` and not a bare CLI:
-a plain Mach-O has nowhere to carry `embedded.provisionprofile`.
-
-### The one-time setup
-
-At [developer.apple.com/account](https://developer.apple.com/account):
-
-1. **Identifiers → + → App IDs → App**, platform **macOS**
-   - Description: `Fingerlock`
-   - Bundle ID, explicit: `com.jvs.fingerlock`
-   - Tick nothing under Capabilities. There is no Keychain Sharing capability on
-     the portal and you don't need one: every App ID carries keychain access
-     already, and `keychain-access-groups` is authorized by the App ID prefix in
-     the profile. Xcode's "Keychain Sharing" checkbox only edits a local
-     entitlements file — which this repo already has.
-2. **Profiles → + → Developer ID** (under Distribution)
-   - App ID: the `Fingerlock` one
-   - Certificate: `Developer ID Application: Jamie Steiner (X3U2KY97YV)`
-   - Name it **`FingerlockProfile`** — the project looks it up by name, so a
-     different name means passing `PROFILE="…"` to make
-3. Download and double-click to install.
-
-Then:
-
-```
-make install          # build the app, sign it, put a cli shim on PATH
-make quick-actions    # add the Finder right-click item
-fingerlock init       # create the Enclave key, choose a recovery passphrase
-```
-
-If you name the profile something else, pass it through: `make install PROFILE="…"`.
-
-## Use
-
-```
-fingerlock seal secrets.json                  # -> secrets.json.fingerlock
-fingerlock unseal secrets.json.fingerlock     # Touch ID
-fingerlock toggle <file>                      # what the Finder item calls
-fingerlock recover <file>                     # passphrase instead of a fingerprint
-fingerlock status
-```
-
-`--keep` leaves the input file in place instead of removing it.
-
-## From Finder
-
-Three ways in, all ending at the same place:
-
-- **Right-click a file** → the item sits at the top level of the menu, next to
-  *Compress*. That's the `FingerlockFinder` extension inside the app bundle.
-- **Double-click a `.fingerlock` file** → unseals it.
-- **Right-click → Quick Actions → Fingerlock** → the older Automator route, still
-  installed by `make quick-actions`. Redundant now; remove it with
-  `rm -rf ~/Library/Services/Fingerlock.workflow` if you'd rather not have both.
-
-The extension is sandboxed and cannot reach the Secure Enclave, so it does nothing
-but collect the selected paths and open a `fingerlock://toggle?path=…` URL. The main
-app does the work. That means the sandboxed process never touches key material.
-
-It's enabled with `pluginkit -e use -i com.jvs.fingerlock.FingerlockFinder`, and
-appears in System Settings → General → Login Items & Extensions → Finder Extensions.
-`pluginkit -e ignore -i com.jvs.fingerlock.FingerlockFinder` turns it off.
-
-A FinderSync extension only offers a menu inside directories it registers an
-interest in, so this one registers every browsable mounted volume. That is the
-price of having the item appear everywhere.
-
-## File format
+Sealing only needs the Enclave's *public* key, so it's instant and asks for nothing.
+Unsealing goes through the Enclave, so it prompts.
 
 ```
 "FLK1"          4 bytes   magic
@@ -114,35 +29,95 @@ header          JSON — original filename, both wrapped copies of the file key
 body            AES-GCM sealed box (nonce ‖ ciphertext ‖ tag)
 ```
 
-Whole files are read into memory. Fine for documents and exports; don't point it
-at a disk image.
+## Using it
 
-## The recovery key matters
+From Finder:
 
-`.biometryCurrentSet` means the Enclave key dies the moment fingerprints are added
-or removed on this Mac. The key is also bound to this machine — a Time Machine
-restore to new hardware brings back the ciphertext and not the key.
+- **Right-click a file** — the item is at the top level of the context menu
+- **Double-click a `.fingerlock` file** — unseals it
+- Both routes go through the same code as the CLI
 
-`fingerlock init` therefore makes an X25519 recovery keypair and wraps the private
-half under a passphrase (PBKDF2-SHA256, 600k iterations) in
-`~/.config/fingerlock/config.json`. Every sealed file carries a copy of its file key
-wrapped to that recovery key, so `fingerlock recover` always works.
-
-Put the passphrase in your password manager. Without it, a re-enrolled fingerprint
-is unrecoverable data loss.
-
-## Development
+From a shell:
 
 ```
-make test    # envelope + recovery crypto; no Enclave, no signing, fast
+fingerlock init                               # create the keys, choose a passphrase
+fingerlock seal secrets.json                  # -> secrets.json.fingerlock
+fingerlock unseal secrets.json.fingerlock     # Touch ID
+fingerlock toggle <file>                      # seal or unseal, whichever applies
+fingerlock recover <file>                     # passphrase instead of a fingerprint
+fingerlock status
 ```
 
-`FINGERLOCK_CONFIG` overrides the config path, which is how the tests stay out of
-your real `~/.config`.
+`--keep` leaves the input file in place instead of removing it.
 
-## Not claimed
+## Recovery
 
-- Deleting the plaintext is `unlink`, not erasure. On APFS the old blocks may be
+The Enclave key is bound to one Mac and to the fingerprints currently enrolled on it.
+Re-enrolling fingerprints invalidates it, and it does not survive a restore to new
+hardware. That is the property that makes a sealed file useless to someone who adds
+their own finger to your Mac.
+
+`fingerlock recover` is the other way in, using the passphrase from `fingerlock init`.
+Every sealed file carries a copy of its key wrapped to the recovery key, so this works
+for any file regardless of what happened to the Enclave.
+
+## Building
+
+Requires Xcode and an Apple Developer ID certificate. You do not need to build it to
+use it — releases carry a signed, notarized DMG. The source is here so you can read
+it.
+
+```
+make test             # crypto round-trip; no Enclave, no signing
+make install          # build, sign, install to ~/Applications
+```
+
+Signing is not optional, and not a formality. The Secure Enclave requires a
+`keychain-access-groups` entitlement, and that entitlement requires a provisioning
+profile to authorize it. Measured on macOS 15.7.7:
+
+| Signing | Result |
+|---|---|
+| ad-hoc (`codesign -s -`) | runs; Enclave calls fail `-34018` |
+| Developer ID, no entitlements | runs; Enclave calls fail `-34018` |
+| Developer ID + `keychain-access-groups`, no profile | **process never reaches `main`** |
+| same, wrapped in an `.app` bundle, no profile | **process never reaches `main`** |
+
+That last state is a stuck exec rather than a crash — `ps` shows `UE`, zero bytes of
+output. The kernel refuses to launch a binary claiming a restricted entitlement it
+cannot validate. It is also why this is an app bundle and not a bare CLI: a plain
+Mach-O has nowhere to carry `embedded.provisionprofile`.
+
+To build it yourself you need your own App ID and a Developer ID provisioning profile
+for it, then `make install PROFILE="<your profile name>"`.
+
+## The Finder extension
+
+`FingerlockFinder.appex` lives inside the app bundle. It is sandboxed and asks for
+nothing but the sandbox: it never opens a file and never touches key material. It
+reads the selected paths from Finder and opens a `fingerlock://toggle?path=…` URL,
+and the main app does the work.
+
+macOS does not auto-enable third-party Finder extensions. It appears in System
+Settings → General → Login Items & Extensions → Finder Extensions, or:
+
+```
+pluginkit -e use -i com.jvs.fingerlock.FingerlockFinder      # enable
+pluginkit -e ignore -i com.jvs.fingerlock.FingerlockFinder   # disable
+```
+
+A FinderSync extension only offers a menu inside directories it registers an interest
+in, so this one registers every browsable mounted volume.
+
+## Limitations
+
+- Files are read into memory whole. Fine for documents; don't point it at a disk image.
+- Folders aren't supported — compress first, seal the archive.
+- Removing the plaintext is `unlink`, not erasure. On APFS the old blocks may be
   recoverable.
-- The plaintext is in this process's memory while sealing and unsealing.
-- Folders aren't supported. Compress first, seal the archive.
+- Plaintext and key material are in the process's memory while sealing and unsealing.
+- Release builds are signed without `get-task-allow`, so a debugger can't attach.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

@@ -1,6 +1,22 @@
+# Build output
 .build/
 DerivedData/
-*.fingerlock
-*.provisionprofile
+*.xcuserdatad/
 xcuserdata/
+.swiftpm/
+
+# Signing material — none of this belongs in a public repo
+*.provisionprofile
+*.mobileprovision
+*.p12
+*.p8
+*.cer
+*.certSigningRequest
+*.keychain
+*.keychain-db
+
+# Sealed files, in case one is ever made inside the tree
+*.fingerlock
+
+# macOS
 .DS_Store
