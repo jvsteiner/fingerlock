@@ -23,11 +23,30 @@ Sealing only needs the Enclave's *public* key, so it's instant and asks for noth
 Unsealing goes through the Enclave, so it prompts.
 
 ```
-"FLK1"          4 bytes   magic
+"FLK2"          4 bytes   magic
 header length   4 bytes   big-endian uint32
-header          JSON — original filename, both wrapped copies of the file key
-body            AES-GCM sealed box (nonce ‖ ciphertext ‖ tag)
+header          JSON — original name, folder flag, both wrapped copies of the key
+chunks          repeated: [4-byte BE length][AES-GCM ciphertext ‖ tag]
 ```
+
+The body is chunked, so neither sealing nor unsealing holds more than one chunk in
+memory — an 800 MB file peaks around 13 MB.
+
+Chunking an AEAD needs care: a per-chunk tag proves each chunk is intact but says
+nothing about its position or whether any are missing. Every chunk therefore
+authenticates, as additional data, a SHA-256 of the header, its own index, and
+whether it is the last chunk. Reordering, duplication, truncation and edits to the
+filename all fail to open rather than producing something plausible. Nonces are a
+counter rather than random, which is safe because the file key is fresh per file.
+
+Files written by v0.1.0 (`FLK1`) still open.
+
+## Folders
+
+Folders are archived with `ditto -c -k --sequesterRsrc --keepParent` before sealing
+and expanded after, so resource forks, extended attributes, permissions and symlinks
+survive the round trip. The header records that the payload was a folder; unsealing
+puts it back where it was.
 
 ## Installing
 
@@ -121,8 +140,6 @@ in, so this one registers every browsable mounted volume.
 
 ## Limitations
 
-- Files are read into memory whole. Fine for documents; don't point it at a disk image.
-- Folders aren't supported — compress first, seal the archive.
 - Removing the plaintext is `unlink`, not erasure. On APFS the old blocks may be
   recoverable.
 - Plaintext and key material are in the process's memory while sealing and unsealing.

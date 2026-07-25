@@ -11,10 +11,10 @@ fingerlock — seal files behind Touch ID
 
 USAGE
   fingerlock init                 create the Secure Enclave key and recovery key
-  fingerlock seal <file>...       encrypt (no fingerprint needed)
-  fingerlock unseal <file>...     decrypt with Touch ID
-  fingerlock toggle <file>...     seal or unseal, whichever applies
-  fingerlock recover <file>...    decrypt with the recovery passphrase instead
+  fingerlock seal <path>...       encrypt a file or folder (no fingerprint needed)
+  fingerlock unseal <path>...     decrypt with Touch ID
+  fingerlock toggle <path>...     seal or unseal, whichever applies
+  fingerlock recover <path>...    decrypt with the recovery passphrase instead
   fingerlock status               show what is set up
   fingerlock reset-key            destroy the Enclave key (recovery only, after this)
 
@@ -29,28 +29,25 @@ func prompt(_ text: String) -> String {
     return String(cString: raw)
 }
 
-/// Write next to the target, fsync, then rename. A crash mid-seal must never be
-/// able to leave you with neither the plaintext nor a complete sealed file.
-func writeAtomically(_ data: Data, to url: URL) throws {
-    let tmp = url.deletingLastPathComponent()
+/// A scratch path beside the target, so the rename that publishes it stays on the
+/// same filesystem. A crash mid-seal must never leave you with neither the
+/// plaintext nor a complete sealed file.
+func scratchSibling(of url: URL) -> URL {
+    url.deletingLastPathComponent()
         .appendingPathComponent(".\(url.lastPathComponent).fltmp")
-    FileManager.default.createFile(atPath: tmp.path, contents: nil,
-                                   attributes: [.posixPermissions: 0o600])
-    let fh = try FileHandle(forWritingTo: tmp)
-    try fh.write(contentsOf: data)
-    try fh.synchronize()
-    try fh.close()
+}
+
+func publish(_ tmp: URL, as url: URL) throws {
     _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
 }
 
-func checkRegularFile(_ url: URL) throws {
+/// Returns whether the path is a directory, throwing if it isn't there at all.
+func checkExists(_ url: URL) throws -> Bool {
     var isDir: ObjCBool = false
     guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
         throw FLError("no such file: \(url.path)")
     }
-    if isDir.boolValue {
-        throw FLError("\(url.lastPathComponent) is a folder — compress it first, then seal the archive.")
-    }
+    return isDir.boolValue
 }
 
 func refuseOverwrite(_ url: URL) throws {
@@ -96,7 +93,7 @@ func cmdSeal(_ paths: [String], keep: Bool) throws {
 
     for path in paths {
         let url = URL(fileURLWithPath: path)
-        try checkRegularFile(url)
+        let isDirectory = try checkExists(url)
         if url.pathExtension == Envelope.ext {
             print("skip: \(url.lastPathComponent) is already sealed")
             continue
@@ -104,20 +101,32 @@ func cmdSeal(_ paths: [String], keep: Bool) throws {
         let out = url.appendingPathExtension(Envelope.ext)
         try refuseOverwrite(out)
 
-        let plaintext = try Data(contentsOf: url)
+        // A folder is archived first and the archive is what gets sealed. The
+        // scratch directory takes the archive with it when it goes out of scope.
+        let scratch = isDirectory ? try Scratch() : nil
+        var source = url
+        if let scratch {
+            source = scratch.file("payload.zip")
+            try Archive.create(folder: url, output: source)
+        }
+
         let fileKey = SymmetricKey(size: .bits256)
         let keyBytes = fileKey.withUnsafeBytes { Data($0) }
-
         let rec = try Recovery.wrap(keyBytes, to: cfg.publicKey)
         let header = Header(
-            version: 1,
+            version: 2,
             originalName: url.lastPathComponent,
+            isDirectory: isDirectory,
+            chunkSize: Envelope.defaultChunkSize,
             enclaveWrapped: try Enclave.wrap(keyBytes, to: pub),
             recoveryEPK: rec.epk,
             recoveryWrapped: rec.ct
         )
-        let body = try Envelope.sealBody(plaintext, fileKey: fileKey)
-        try writeAtomically(try Envelope.encode(header: header, body: body), to: out)
+
+        let tmp = scratchSibling(of: out)
+        try? FileManager.default.removeItem(at: tmp)
+        try Envelope.seal(input: source, output: tmp, header: header, fileKey: fileKey)
+        try publish(tmp, as: out)
 
         if !keep { try FileManager.default.removeItem(at: url) }
         print("sealed: \(out.lastPathComponent)")
@@ -130,16 +139,28 @@ func cmdOpen(_ paths: [String], keep: Bool, label: String,
              openKey: (Header, URL) throws -> Data) throws {
     for path in paths {
         let url = URL(fileURLWithPath: path)
-        try checkRegularFile(url)
+        _ = try checkExists(url)
 
-        let (header, body) = try Envelope.decode(try Data(contentsOf: url))
-        let out = url.deletingLastPathComponent()
-            .appendingPathComponent(header.originalName)
+        let parent = url.deletingLastPathComponent()
+        let peek = try Envelope.readHeader(url)
+        let out = parent.appendingPathComponent(peek.originalName)
         try refuseOverwrite(out)
 
-        let fileKey = SymmetricKey(data: try openKey(header, url))
-        let plaintext = try Envelope.openBody(body, fileKey: fileKey)
-        try writeAtomically(plaintext, to: out)
+        // Folders are decrypted to a scratch archive and expanded from there, so a
+        // failure part way through cannot leave a half-written folder in place.
+        let scratch = peek.directory ? try Scratch() : nil
+        let destination = scratch?.file("payload.zip") ?? scratchSibling(of: out)
+        try? FileManager.default.removeItem(at: destination)
+
+        let header = try Envelope.open(input: url, output: destination) { header in
+            SymmetricKey(data: try openKey(header, url))
+        }
+
+        if header.directory {
+            try Archive.expand(archive: destination, into: parent)
+        } else {
+            try publish(destination, as: out)
+        }
 
         if !keep { try FileManager.default.removeItem(at: url) }
         print("\(label): \(out.lastPathComponent)")

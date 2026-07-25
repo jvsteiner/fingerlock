@@ -11,6 +11,7 @@ swiftc -O \
 	Tests/crypto-roundtrip/main.swift \
 	Sources/fingerlock/Envelope.swift \
 	Sources/fingerlock/Recovery.swift \
+	Sources/fingerlock/Archive.swift \
 	-o "$OUT/roundtrip"
 
 FINGERLOCK_CONFIG="$OUT/config.json" "$OUT/roundtrip"
