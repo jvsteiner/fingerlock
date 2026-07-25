@@ -30,4 +30,9 @@ LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchS
 as_user /usr/bin/pluginkit -a "$APPEX" 2>/dev/null
 as_user /usr/bin/pluginkit -e use -i "$BUNDLE_ID" 2>/dev/null
 
+# Open the app so first-run setup appears. There are no keys yet on a fresh
+# install, so it shows the setup window; on an upgrade it finds keys already
+# there, says so, and quits.
+as_user /usr/bin/open -a /Applications/fingerlock.app 2>/dev/null
+
 exit 0

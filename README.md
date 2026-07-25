@@ -29,6 +29,15 @@ header          JSON — original filename, both wrapped copies of the file key
 body            AES-GCM sealed box (nonce ‖ ciphertext ‖ tag)
 ```
 
+## Installing
+
+Download the `.pkg` from [Releases](https://github.com/jvsteiner/fingerlock/releases).
+It installs the app to `/Applications`, puts `fingerlock` on your `PATH` at
+`/usr/local/bin`, turns on the Finder extension, and opens setup so you can choose a
+recovery passphrase. Signed and notarized.
+
+`fingerlock init` does the same setup from a terminal if you'd rather.
+
 ## Using it
 
 From Finder:
@@ -64,12 +73,13 @@ for any file regardless of what happened to the Enclave.
 ## Building
 
 Requires Xcode and an Apple Developer ID certificate. You do not need to build it to
-use it — releases carry a signed, notarized DMG. The source is here so you can read
-it.
+use it — the releases carry a signed, notarized installer. The source is here so you
+can read it.
 
 ```
-make test             # crypto round-trip; no Enclave, no signing
-make install          # build, sign, install to ~/Applications
+make test                    # crypto round-trip; no Enclave, no signing
+make install                 # build, sign, install to ~/Applications
+make pkg VERSION=0.1.0       # signed, notarized installer
 ```
 
 Signing is not optional, and not a formality. The Secure Enclave requires a

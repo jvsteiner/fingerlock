@@ -63,6 +63,13 @@ fi
 say "Staging"
 ditto "$APP" "$STAGE/Applications/fingerlock.app"
 
+# The CLI is not optional. Shipping it as a payload symlink rather than something
+# the postinstall script conjures keeps it under pkgutil's accounting, so an
+# uninstall can find it. Entitlements survive the symlink — the kernel resolves it
+# and the real path is still inside the signed bundle.
+mkdir -p "$STAGE/usr/local/bin"
+ln -sf "/Applications/fingerlock.app/Contents/MacOS/fingerlock" "$STAGE/usr/local/bin/fingerlock"
+
 say "Building the component package"
 pkgbuild \
 	--root "$STAGE" \

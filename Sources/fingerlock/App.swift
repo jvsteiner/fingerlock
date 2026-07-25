@@ -6,48 +6,65 @@ import Foundation
 /// extension — it can't reach the Secure Enclave from its sandbox, so it opens a
 /// `fingerlock://toggle?path=…` URL and this does the work.
 ///
-/// There is no window. The only UI is the Touch ID prompt the Enclave puts up and
-/// an alert if something goes wrong; then the process quits.
+/// Beyond first-run setup there is no interface. The only UI is the Touch ID prompt
+/// the Enclave puts up, and an alert if something goes wrong.
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var handledSomething = false
+    private var pending: [String] = []
+    private var launched = false
+    private var setup: SetupWindow?
 
+    /// Can arrive before or after `applicationDidFinishLaunching`, so it only
+    /// collects paths — `start()` decides what to do with them.
     func application(_ application: NSApplication, open urls: [URL]) {
-        handledSomething = true
-        var files: [String] = []
         for url in urls {
             if url.isFileURL {
-                files.append(url.path)
+                pending.append(url.path)
             } else if url.scheme == "fingerlock" {
-                files.append(contentsOf: Self.paths(fromCommandURL: url))
+                pending.append(contentsOf: Self.paths(fromCommandURL: url))
             }
         }
-        run(files)
+        if launched { start() }
     }
 
-    /// Nothing arrived — launched directly from Finder or the Dock. Say what this
-    /// is rather than quitting silently, which reads as a crash.
     func applicationDidFinishLaunching(_ notification: Notification) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [self] in
-            guard !handledSomething else { return }
-            let a = NSAlert()
-            a.messageText = "Fingerlock"
-            a.informativeText = """
+        launched = true
+        // Give an open-documents event that is already in flight a chance to land,
+        // so a double-click doesn't get treated as a bare launch.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in start() }
+    }
+
+    private func start() {
+        guard setup == nil else { return }
+
+        if !setupComplete() {
+            let window = SetupWindow()
+            setup = window
+            window.run { [self] ok in
+                setup = nil
+                guard ok else { NSApp.terminate(nil); return }
+                if pending.isEmpty {
+                    note("Fingerlock is ready.", "Right-click any file in Finder to seal it.")
+                }
+                handlePending()
+            }
+            return
+        }
+        handlePending()
+    }
+
+    private func handlePending() {
+        let files = pending
+        pending = []
+
+        guard !files.isEmpty else {
+            note("Fingerlock", """
                 Nothing to do. Double-click a .fingerlock file to unseal it, or \
                 right-click any file in Finder and choose Fingerlock.
-                """
-            a.runModal()
+                """)
             NSApp.terminate(nil)
+            return
         }
-    }
 
-    /// `fingerlock://toggle?path=/a&path=/b`
-    static func paths(fromCommandURL url: URL) -> [String] {
-        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        return items.filter { $0.name == "path" }.compactMap { $0.value }
-    }
-
-    private func run(_ files: [String]) {
-        guard !files.isEmpty else { NSApp.terminate(nil); return }
         do {
             try cmdToggle(files, keep: false)
         } catch {
@@ -56,10 +73,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             a.messageText = "Fingerlock"
             a.informativeText = "\(error)"
             a.runModal()
-            NSApp.terminate(nil)
-            return
         }
         NSApp.terminate(nil)
+    }
+
+    private func note(_ title: String, _ body: String) {
+        let a = NSAlert()
+        a.messageText = title
+        a.informativeText = body
+        a.runModal()
+    }
+
+    /// `fingerlock://toggle?path=/a&path=/b`
+    static func paths(fromCommandURL url: URL) -> [String] {
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        return items.filter { $0.name == "path" }.compactMap { $0.value }
     }
 }
 
