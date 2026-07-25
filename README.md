@@ -18,7 +18,9 @@ Built, signed, installed, and launching. Run `fingerlock init` to create your ke
 | CLI | done |
 | Finder Quick Action | done — registers and runs |
 | Signing, profile, entitlements | done — see [Signing](#signing) |
-| Touch ID seal/unseal on a real file | not yet exercised |
+| Double-click a sealed file to unseal | done |
+| Top-level Finder menu item (FinderSync) | built, enabled, loads — menu click not yet exercised |
+| Touch ID seal/unseal from the CLI | working |
 
 ## Signing
 
@@ -80,9 +82,28 @@ fingerlock status
 
 `--keep` leaves the input file in place instead of removing it.
 
-From Finder: right-click → Quick Actions → Fingerlock. (Quick Actions are a
-submenu. Sitting at the top level next to *Compress* would need a FinderSync
-extension, which is a much larger build.)
+## From Finder
+
+Three ways in, all ending at the same place:
+
+- **Right-click a file** → the item sits at the top level of the menu, next to
+  *Compress*. That's the `FingerlockFinder` extension inside the app bundle.
+- **Double-click a `.fingerlock` file** → unseals it.
+- **Right-click → Quick Actions → Fingerlock** → the older Automator route, still
+  installed by `make quick-actions`. Redundant now; remove it with
+  `rm -rf ~/Library/Services/Fingerlock.workflow` if you'd rather not have both.
+
+The extension is sandboxed and cannot reach the Secure Enclave, so it does nothing
+but collect the selected paths and open a `fingerlock://toggle?path=…` URL. The main
+app does the work. That means the sandboxed process never touches key material.
+
+It's enabled with `pluginkit -e use -i com.jvs.fingerlock.FingerlockFinder`, and
+appears in System Settings → General → Login Items & Extensions → Finder Extensions.
+`pluginkit -e ignore -i com.jvs.fingerlock.FingerlockFinder` turns it off.
+
+A FinderSync extension only offers a menu inside directories it registers an
+interest in, so this one registers every browsable mounted volume. That is the
+price of having the item appear everywhere.
 
 ## File format
 
