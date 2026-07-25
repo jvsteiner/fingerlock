@@ -35,6 +35,34 @@ mkdir -p "$OUT" "$STAGE/Applications" "$OUT/resources"
 
 say() { printf '\n==> %s\n' "$1"; }
 
+# Check the credentials before spending a couple of minutes building something we
+# then can't notarize.
+if [ "$SKIP_NOTARIZE" != "1" ]; then
+	if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+		cat >&2 <<EOF
+No notarization credentials stored under the profile "$NOTARY_PROFILE".
+
+Set them up once, either with an app-specific password from appleid.apple.com:
+
+    xcrun notarytool store-credentials $NOTARY_PROFILE \\
+        --apple-id <your-apple-id> --team-id X3U2KY97YV
+
+or with an App Store Connect API key:
+
+    xcrun notarytool store-credentials $NOTARY_PROFILE \\
+        --key AuthKey_XXXX.p8 --key-id <KEY_ID> --issuer <ISSUER_ID>
+
+Leave the password off the command line and it will prompt, which keeps it out
+of your shell history.
+
+To build an unnotarized package for local testing instead:
+
+    make pkg VERSION=$VERSION SKIP_NOTARIZE=1
+EOF
+		exit 1
+	fi
+fi
+
 say "Building the app"
 make app
 
