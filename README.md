@@ -73,6 +73,7 @@ fingerlock seal secrets.json                  # -> secrets.json.fingerlock
 fingerlock unseal secrets.json.fingerlock     # Touch ID
 fingerlock toggle <file>                      # seal or unseal, whichever applies
 fingerlock recover <file>                     # passphrase instead of a fingerprint
+fingerlock reseal <file>                      # re-wrap to this Mac — see Moving below
 fingerlock status
 ```
 
@@ -88,6 +89,53 @@ their own finger to your Mac.
 `fingerlock recover` is the other way in, using the passphrase from `fingerlock init`.
 Every sealed file carries a copy of its key wrapped to the recovery key, so this works
 for any file regardless of what happened to the Enclave.
+
+## Moving to a new Mac
+
+**The Secure Enclave key cannot be moved.** It is generated inside the Enclave and
+the private half never leaves the chip — there is no export, and adding one would
+defeat the point. A new Mac always means a new key, and files sealed on the old one
+cannot be opened with a fingerprint on the new one.
+
+**The recovery key is the migration path.** `~/.config/fingerlock/config.json` holds
+your X25519 public key plus the private half wrapped under a passphrase. That file
+and the passphrase together open any sealed file on any Mac.
+
+So: **back up `config.json`.** Without it, sealed files die with the machine. It is
+useless to anyone who doesn't know the passphrase, so keeping a copy alongside the
+passphrase in your password manager is reasonable.
+
+### The move
+
+```
+# 1. Install fingerlock on the new Mac, but don't run setup yet.
+
+# 2. Copy the recovery key across first.
+mkdir -p ~/.config/fingerlock
+cp /wherever/config.json ~/.config/fingerlock/config.json
+
+# 3. Setup finds it, asks for its passphrase to confirm, and creates a Secure
+#    Enclave key for this Mac. Your existing recovery key is left alone.
+fingerlock init
+
+# 4. Bring your sealed files over, then re-wrap them to this Mac's Enclave key.
+fingerlock reseal *.fingerlock
+```
+
+`reseal` asks for the recovery passphrase, then decrypts and re-encrypts a chunk at
+a time straight from the old file to the new one. The plaintext is never written to
+disk — which matters, because step 4 is the moment everything you own would
+otherwise be sitting in a folder in the clear.
+
+If you skip step 4, `fingerlock recover` still opens individual files with the
+passphrase. You just won't get Touch ID until they've been resealed.
+
+### Order matters
+
+Copy `config.json` **before** first running setup. If you set up first, you get a
+fresh recovery key, and files sealed on the old Mac won't match it. Nothing is lost —
+drop the old `config.json` in, run `fingerlock reseal`, and everything sealed with
+the old key comes back.
 
 ## Building
 

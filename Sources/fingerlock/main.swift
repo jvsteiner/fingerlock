@@ -15,6 +15,8 @@ USAGE
   fingerlock unseal <path>...     decrypt with Touch ID
   fingerlock toggle <path>...     seal or unseal, whichever applies
   fingerlock recover <path>...    decrypt with the recovery passphrase instead
+  fingerlock reseal <path>...     re-wrap to this Mac's Enclave key, after moving
+                                  machines — never writes the plaintext out
   fingerlock status               show what is set up
   fingerlock reset-key            destroy the Enclave key (recovery only, after this)
 
@@ -64,7 +66,14 @@ func cmdInit() throws {
         return
     }
 
-    if !Recovery.exists() {
+    if Recovery.exists() {
+        // A recovery key copied from another Mac. Check the passphrase rather than
+        // accepting one we have no use for — otherwise the prompt is theatre.
+        print("Recovery key found at \(Recovery.configURL.path).")
+        _ = try Recovery.privateKey(from: try Recovery.load(),
+                                    passphrase: prompt("Its passphrase: "))
+        print("Passphrase confirmed.")
+    } else {
         print("""
             Choose a recovery passphrase.
 
@@ -84,7 +93,7 @@ func cmdInit() throws {
         _ = try Enclave.create()
         print("Secure Enclave key created.")
     }
-    print("Ready. Seal something with `fingerlock seal <file>`.")
+    print("Ready. Seal something with `fingerlock seal <path>`.")
 }
 
 func cmdSeal(_ paths: [String], keep: Bool) throws {
@@ -182,6 +191,50 @@ func cmdRecover(_ paths: [String], keep: Bool) throws {
     }
 }
 
+/// Re-wrap sealed files to this Mac's Enclave key, using the recovery passphrase to
+/// get in. What you run after moving to a new machine, where the old Enclave key no
+/// longer exists and never will again.
+func cmdReseal(_ paths: [String]) throws {
+    let cfg = try Recovery.load()
+    let priv = try Recovery.privateKey(from: cfg, passphrase: prompt("Recovery passphrase: "))
+    let pub = try Enclave.publicKey()
+
+    for path in paths {
+        let url = URL(fileURLWithPath: path)
+        _ = try checkExists(url)
+        guard url.pathExtension == Envelope.ext else {
+            throw FLError("\(url.lastPathComponent) is not a sealed file.")
+        }
+
+        let tmp = scratchSibling(of: url)
+        try? FileManager.default.removeItem(at: tmp)
+        try Envelope.reseal(
+            input: url,
+            output: tmp,
+            oldKey: { header in
+                SymmetricKey(data: try Recovery.unwrap(epk: header.recoveryEPK,
+                                                       ct: header.recoveryWrapped, with: priv))
+            },
+            makeHeader: { old in
+                let fileKey = SymmetricKey(size: .bits256)
+                let keyBytes = fileKey.withUnsafeBytes { Data($0) }
+                let rec = try Recovery.wrap(keyBytes, to: cfg.publicKey)
+                return (Header(
+                    version: 2,
+                    originalName: old.originalName,
+                    isDirectory: old.directory,
+                    chunkSize: Envelope.defaultChunkSize,
+                    enclaveWrapped: try Enclave.wrap(keyBytes, to: pub),
+                    recoveryEPK: rec.epk,
+                    recoveryWrapped: rec.ct
+                ), fileKey)
+            }
+        )
+        try publish(tmp, as: url)
+        print("resealed: \(url.lastPathComponent)")
+    }
+}
+
 func cmdToggle(_ paths: [String], keep: Bool) throws {
     let sealed = paths.filter { URL(fileURLWithPath: $0).pathExtension == Envelope.ext }
     let plain = paths.filter { URL(fileURLWithPath: $0).pathExtension != Envelope.ext }
@@ -240,6 +293,7 @@ do {
     case "unseal": try cmdUnseal(try requireFiles(), keep: keep)
     case "toggle": try cmdToggle(try requireFiles(), keep: keep)
     case "recover": try cmdRecover(try requireFiles(), keep: keep)
+    case "reseal": try cmdReseal(try requireFiles())
     case "status": cmdStatus()
     case "reset-key": try cmdResetKey()
     case "-h", "--help", "help": print(usage)

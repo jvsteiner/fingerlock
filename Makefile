@@ -9,8 +9,8 @@ PROFILE  ?= FingerlockProfile
 APPS     ?= $(HOME)/Applications
 PREFIX   ?= $(HOME)/.local/bin
 
-DERIVED = .build/xcode
-APP     = $(DERIVED)/Build/Products/Release/fingerlock.app
+DERIVED ?= .build/xcode
+APP      = $(DERIVED)/Build/Products/Release/fingerlock.app
 
 .PHONY: all app install quick-actions check-profile test uninstall clean
 
@@ -51,7 +51,7 @@ test:
 #   make pkg VERSION=0.1.0 SKIP_NOTARIZE=1   # local check, no Apple round-trip
 pkg:
 	@test -n "$(VERSION)" || { echo "usage: make pkg VERSION=0.1.0"; exit 1; }
-	SKIP_NOTARIZE=$(SKIP_NOTARIZE) ./scripts/build-pkg.sh $(VERSION)
+	SKIP_NOTARIZE=$(SKIP_NOTARIZE) DERIVED=$(DERIVED) ./scripts/build-pkg.sh $(VERSION)
 
 uninstall:
 	rm -f $(PREFIX)/fingerlock

@@ -215,6 +215,90 @@ enum Envelope {
         } while try inFH.offset() < total
     }
 
+    /// Re-wraps a sealed file under a fresh file key, decrypting and re-encrypting a
+    /// chunk at a time so the plaintext never reaches disk and memory stays flat.
+    ///
+    /// This is the migration path: after moving to a new Mac the old Enclave key is
+    /// gone for good, so files have to be re-wrapped to the new one. Doing it as
+    /// unseal-then-seal would leave everything you own sitting in a folder in the
+    /// clear at exactly the wrong moment.
+    static func reseal(input: URL, output: URL,
+                       oldKey: (Header) throws -> SymmetricKey,
+                       makeHeader: (Header) throws -> (Header, SymmetricKey)) throws {
+        let inFH = try FileHandle(forReadingFrom: input)
+        defer { try? inFH.close() }
+
+        let (oldHeader, oldHeaderBytes, isV2) = try readHeader(inFH)
+        let bodyStart = try inFH.offset()
+        let key = try oldKey(oldHeader)
+        let (newHeader, newKey) = try makeHeader(oldHeader)
+
+        let newHeaderBytes = try encodeHeader(newHeader)
+        let newHash = Data(SHA256.hash(data: newHeaderBytes))
+        let oldHash = Data(SHA256.hash(data: oldHeaderBytes))
+
+        FileManager.default.createFile(atPath: output.path, contents: nil,
+                                       attributes: [.posixPermissions: 0o600])
+        let outFH = try FileHandle(forWritingTo: output)
+        defer { try? outFH.close() }
+
+        try outFH.write(contentsOf: magicV2)
+        try outFH.write(contentsOf: be32(newHeaderBytes.count))
+        try outFH.write(contentsOf: newHeaderBytes)
+
+        func emit(_ plain: Data, _ index: UInt64, _ isFinal: Bool) throws {
+            let box = try AES.GCM.seal(plain, using: newKey,
+                                       nonce: nonce(index),
+                                       authenticating: aad(newHash, index, isFinal))
+            var frame = be32(box.ciphertext.count + box.tag.count)
+            frame.append(box.ciphertext)
+            frame.append(box.tag)
+            try outFH.write(contentsOf: frame)
+        }
+
+        if isV2 {
+            let total = try inFH.seekToEnd()
+            try inFH.seek(toOffset: bodyStart)
+            var index: UInt64 = 0
+            repeat {
+                try autoreleasepool {
+                    guard let len = try readBE32(inFH), len >= tagSize,
+                          let frame = try inFH.read(upToCount: len), frame.count == len else {
+                        throw FLError("truncated file.")
+                    }
+                    let isFinal = try inFH.offset() >= total
+                    let box = try AES.GCM.SealedBox(nonce: nonce(index),
+                                                    ciphertext: frame.prefix(frame.count - tagSize),
+                                                    tag: frame.suffix(tagSize))
+                    guard let plain = try? AES.GCM.open(box, using: key,
+                                                        authenticating: aad(oldHash, index, isFinal)) else {
+                        throw FLError("decryption failed — the file has been modified or truncated.")
+                    }
+                    try emit(plain, index, isFinal)
+                    index += 1
+                }
+            } while try inFH.offset() < total
+        } else {
+            // Format 1 was one box over the whole body, so there is nothing to
+            // stream — it has to be held whole either way.
+            let body = try inFH.readToEnd() ?? Data()
+            guard let plain = try? AES.GCM.open(try AES.GCM.SealedBox(combined: body), using: key) else {
+                throw FLError("decryption failed — the file has been modified or the key is wrong.")
+            }
+            let size = newHeader.chunkSize ?? defaultChunkSize
+            var index: UInt64 = 0
+            var offset = 0
+            repeat {
+                let end = min(offset + size, plain.count)
+                let slice = plain.subdata(in: offset..<end)
+                offset = end
+                try emit(slice, index, offset >= plain.count)
+                index += 1
+            } while offset < plain.count
+        }
+        try outFH.synchronize()
+    }
+
     /// Format 1: one sealed box covering the whole body. Kept so files sealed by
     /// v0.1.0 still open. Nothing writes this any more.
     private static func openLegacy(_ inFH: FileHandle, _ outFH: FileHandle,

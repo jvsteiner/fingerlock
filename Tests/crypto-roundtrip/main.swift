@@ -176,11 +176,13 @@ if let range = hdrBytes.range(of: Data("secrets.json".utf8)) {
 
 // MARK: - reading what v0.1.0 wrote
 
+/// Held outside the block so the reseal tests can upgrade the same fixture.
+let legacyKey = SymmetricKey(size: .bits256)
+
 do {
     // Hand-build a format 1 file: magic, header with no isDirectory or chunkSize,
     // then one sealed box over the whole body.
     let legacyPayload = Data("sealed by the first release".utf8)
-    let legacyKey = SymmetricKey(size: .bits256)
     let keyData = legacyKey.withUnsafeBytes { Data($0) }
     let rec = try Recovery.wrap(keyData, to: cfg.publicKey)
     let legacyHeader = Header(
@@ -262,6 +264,67 @@ do {
     check(perms?.int16Value == 0o750, "directory permissions survive the round trip")
 } catch {
     check(false, "folder round trip threw: \(error)")
+}
+
+// MARK: - reseal
+
+do {
+    let (original, oldKey) = sealed(multi, name: "migrated.bin")
+    let before = try Data(contentsOf: original)
+
+    let newKey = SymmetricKey(size: .bits256)
+    let resealed = path("resealed.fingerlock")
+    try Envelope.reseal(input: original, output: resealed, oldKey: { _ in oldKey }) { old in
+        (Header(version: 2, originalName: old.originalName, isDirectory: old.directory,
+                chunkSize: chunk,
+                enclaveWrapped: Data("new Enclave blob".utf8),
+                recoveryEPK: old.recoveryEPK, recoveryWrapped: old.recoveryWrapped), newKey)
+    }
+
+    check(try opened(resealed, newKey) == multi, "resealed file opens under the new key")
+    check((try? opened(resealed, oldKey)) == nil, "the old key no longer opens it")
+    check(try Data(contentsOf: resealed) != before, "ciphertext actually changed")
+    check(try Envelope.readHeader(resealed).originalName == "migrated.bin",
+          "reseal preserves the original name")
+
+    // A folder-flagged file must stay folder-flagged, or unsealing would write the
+    // archive out instead of expanding it.
+    let (dirFile, dirKey) = { () -> (URL, SymmetricKey) in
+        let input = path("dirpayload")
+        try! Data("archive bytes".utf8).write(to: input)
+        let out = path("dir.fingerlock")
+        let (h, k) = makeHeader("somefolder", directory: true)
+        try! Envelope.seal(input: input, output: out, header: h, fileKey: k)
+        return (out, k)
+    }()
+    let dirResealed = path("dir-resealed.fingerlock")
+    let dirNewKey = SymmetricKey(size: .bits256)
+    try Envelope.reseal(input: dirFile, output: dirResealed, oldKey: { _ in dirKey }) { old in
+        (Header(version: 2, originalName: old.originalName, isDirectory: old.directory,
+                chunkSize: chunk, enclaveWrapped: Data("new".utf8),
+                recoveryEPK: old.recoveryEPK, recoveryWrapped: old.recoveryWrapped), dirNewKey)
+    }
+    check(try Envelope.readHeader(dirResealed).directory, "reseal preserves the folder flag")
+
+    // Format 1 in, format 2 out.
+    let legacyURL = path("legacy.fingerlock")
+    if FileManager.default.fileExists(atPath: legacyURL.path) {
+        let upgraded = path("upgraded.fingerlock")
+        let k2 = SymmetricKey(size: .bits256)
+        try Envelope.reseal(input: legacyURL, output: upgraded, oldKey: { _ in legacyKey }) { old in
+            (Header(version: 2, originalName: old.originalName, isDirectory: false,
+                    chunkSize: chunk, enclaveWrapped: Data("new".utf8),
+                    recoveryEPK: old.recoveryEPK, recoveryWrapped: old.recoveryWrapped), k2)
+        }
+        check(try Data(contentsOf: upgraded).prefix(4) == Envelope.magicV2,
+              "reseal upgrades a format 1 file to format 2")
+        check(try opened(upgraded, k2) == Data("sealed by the first release".utf8),
+              "the upgraded file still holds the same bytes")
+    } else {
+        check(false, "expected the legacy fixture to exist")
+    }
+} catch {
+    check(false, "reseal threw: \(error)")
 }
 
 // MARK: - key wrapping

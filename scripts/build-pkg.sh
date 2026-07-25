@@ -26,7 +26,8 @@ INSTALLER_IDENTITY="${INSTALLER_IDENTITY:-Developer ID Installer: Jamie Steiner 
 NOTARY_PROFILE="${NOTARY_PROFILE:-fingerlock-notary}"
 SKIP_NOTARIZE="${SKIP_NOTARIZE:-0}"
 
-APP=".build/xcode/Build/Products/Release/fingerlock.app"
+DERIVED="${DERIVED:-.build/xcode}"
+APP="$DERIVED/Build/Products/Release/fingerlock.app"
 OUT=".build/pkg"
 STAGE="$OUT/root"
 
@@ -64,7 +65,7 @@ EOF
 fi
 
 say "Building the app"
-make app
+make app DERIVED="$DERIVED"
 
 say "Checking the app is signed the way the installer will claim"
 codesign -v --deep --strict "$APP"

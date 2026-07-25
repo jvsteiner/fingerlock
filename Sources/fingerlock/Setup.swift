@@ -14,6 +14,12 @@ final class SetupWindow: NSObject, NSWindowDelegate {
     private let createButton = NSButton()
     private var onFinish: ((Bool) -> Void)?
 
+    /// A recovery key is already present — copied over from another Mac — and only
+    /// the Enclave key is missing. The passphrase then has to be *checked* against
+    /// what's there rather than used to create anything, or we'd be asking for a
+    /// secret and silently throwing it away.
+    private let migrating = Recovery.exists() && !Enclave.exists()
+
     override init() {
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 300),
@@ -41,10 +47,16 @@ final class SetupWindow: NSObject, NSWindowDelegate {
         let content = NSView(frame: window.contentRect(forFrameRect: window.frame))
         window.contentView = content
 
-        let heading = NSTextField(labelWithString: "Choose a recovery passphrase")
+        let heading = NSTextField(labelWithString: migrating
+            ? "Confirm your recovery passphrase"
+            : "Choose a recovery passphrase")
         heading.font = .systemFont(ofSize: 15, weight: .semibold)
 
-        let blurb = NSTextField(wrappingLabelWithString: """
+        let blurb = NSTextField(wrappingLabelWithString: migrating ? """
+            A recovery key from another Mac is already here. Enter its passphrase to \
+            confirm, and a Secure Enclave key will be created for this Mac. Files \
+            sealed elsewhere open with `fingerlock reseal`.
+            """ : """
             Sealed files open with your fingerprint. The passphrase is the other way \
             in — it works if this Mac's enrolled fingerprints change, or on a \
             different machine. Store it somewhere you'll still have it later.
@@ -59,11 +71,14 @@ final class SetupWindow: NSObject, NSWindowDelegate {
             f.target = self
             f.action = #selector(create)
         }
+        // Nothing to confirm against when the passphrase already exists elsewhere.
+        confirm.isHidden = migrating
+        confirmLabel.isHidden = migrating
 
         status.font = .systemFont(ofSize: 11)
         status.textColor = .secondaryLabelColor
 
-        createButton.title = "Create Keys"
+        createButton.title = migrating ? "Confirm and Continue" : "Create Keys"
         createButton.bezelStyle = .rounded
         createButton.keyEquivalent = "\r"
         createButton.target = self
@@ -95,17 +110,25 @@ final class SetupWindow: NSObject, NSWindowDelegate {
 
     @objc private func create() {
         let a = passphrase.stringValue
-        let b = confirm.stringValue
 
-        guard a.count >= 8 else { return fail("Use at least 8 characters.") }
-        guard a == b else { return fail("The two passphrases don't match.") }
+        if migrating {
+            guard !a.isEmpty else { return fail("Enter the passphrase for the recovery key.") }
+        } else {
+            guard a.count >= 8 else { return fail("Use at least 8 characters.") }
+            guard a == confirm.stringValue else { return fail("The two passphrases don't match.") }
+        }
 
         status.textColor = .secondaryLabelColor
-        status.stringValue = "Creating keys…"
+        status.stringValue = migrating ? "Checking…" : "Creating keys…"
         createButton.isEnabled = false
 
         do {
-            if !Recovery.exists() { _ = try Recovery.create(passphrase: a) }
+            if migrating {
+                // Throws on a wrong passphrase, which is the whole point of asking.
+                _ = try Recovery.privateKey(from: try Recovery.load(), passphrase: a)
+            } else if !Recovery.exists() {
+                _ = try Recovery.create(passphrase: a)
+            }
             if !Enclave.exists() { _ = try Enclave.create() }
         } catch {
             createButton.isEnabled = true
