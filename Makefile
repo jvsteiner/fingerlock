@@ -25,7 +25,8 @@ check-profile:
 
 app: check-profile
 	xcodebuild -project fingerlock.xcodeproj -scheme fingerlock \
-		-configuration Release -derivedDataPath $(DERIVED) build
+		-configuration Release -derivedDataPath $(DERIVED) \
+		$(if $(MARKETING_VERSION),MARKETING_VERSION=$(MARKETING_VERSION)) build
 	@codesign -d --entitlements - $(APP) 2>/dev/null | grep -q keychain-access-groups \
 		&& echo "built and signed: $(APP)" \
 		|| (echo "entitlements did not stick" && exit 1)

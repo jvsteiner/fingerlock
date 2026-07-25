@@ -65,7 +65,9 @@ EOF
 fi
 
 say "Building the app"
-make app DERIVED="$DERIVED"
+# So the installed app reports the release version rather than whatever is pinned
+# in the project file.
+make app DERIVED="$DERIVED" MARKETING_VERSION="$VERSION"
 
 say "Checking the app is signed the way the installer will claim"
 codesign -v --deep --strict "$APP"
@@ -136,8 +138,24 @@ mkdir -p "$STAGE/usr/local/bin"
 ln -sf "/Applications/fingerlock.app/Contents/MacOS/fingerlock" "$STAGE/usr/local/bin/fingerlock"
 
 say "Building the component package"
+
+# pkgbuild marks app bundles relocatable by default, which means the Installer asks
+# LaunchServices where com.jvs.fingerlock already lives and installs *there* instead
+# of /Applications. A stray copy in a build directory is enough to hijack the
+# install — it lands in the build tree, owned by root, while /usr/local/bin points
+# at an /Applications that never receives anything.
+pkgbuild --analyze --root "$STAGE" "$OUT/component.plist"
+count=$(plutil -convert json -o - "$OUT/component.plist" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+[ "$count" -ge 1 ] || { echo "component plist came back empty — staging is wrong" >&2; exit 1; }
+for i in $(seq 0 $((count - 1))); do
+	plutil -replace "$i.BundleIsRelocatable" -bool NO "$OUT/component.plist"
+done
+plutil -convert json -o - "$OUT/component.plist" \
+	| python3 -c 'import json,sys; [print("    not relocatable:", c["RootRelativeBundlePath"]) for c in json.load(sys.stdin)]'
+
 pkgbuild \
 	--root "$STAGE" \
+	--component-plist "$OUT/component.plist" \
 	--identifier com.jvs.fingerlock \
 	--version "$VERSION" \
 	--scripts packaging/scripts \
