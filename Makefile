@@ -12,7 +12,7 @@ PREFIX   ?= $(HOME)/.local/bin
 DERIVED ?= .build/xcode
 APP      = $(DERIVED)/Build/Products/Release/fingerlock.app
 
-.PHONY: all app install quick-actions check-profile test uninstall clean
+.PHONY: all app install check-profile test uninstall clean
 
 all: app
 
@@ -38,9 +38,6 @@ install: app
 	ln -sf "$(APPS)/fingerlock.app/Contents/MacOS/fingerlock" $(PREFIX)/fingerlock
 	@echo "installed: $(APPS)/fingerlock.app  (cli: $(PREFIX)/fingerlock)"
 
-quick-actions: install
-	FINGERLOCK=$(PREFIX)/fingerlock ./scripts/install-quick-actions.sh
-
 # Crypto round-trip, no Enclave and no signing involved. Fast inner loop.
 test:
 	swift build
@@ -57,6 +54,7 @@ pkg:
 uninstall:
 	rm -f $(PREFIX)/fingerlock
 	rm -rf "$(APPS)/fingerlock.app"
+	# Nothing installs this any more, but early builds did — clean it up if present.
 	rm -rf "$(HOME)/Library/Services/Fingerlock.workflow"
 
 clean:
