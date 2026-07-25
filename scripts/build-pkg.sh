@@ -175,5 +175,13 @@ if [ "$SKIP_NOTARIZE" != "1" ]; then
 	spctl -a -vvv -t install "$OUT/fingerlock-$VERSION.pkg" 2>&1 | sed 's/^/    /'
 fi
 
+# Everything above works in .build alongside the intermediates. The finished
+# installer belongs somewhere you can actually find it.
+mkdir -p dist
+cp "$OUT/fingerlock-$VERSION.pkg" "dist/fingerlock-$VERSION.pkg"
+
 say "Done"
-shasum -a 256 "$OUT/fingerlock-$VERSION.pkg"
+echo
+echo "    $(pwd)/dist/fingerlock-$VERSION.pkg"
+echo "    $(shasum -a 256 "dist/fingerlock-$VERSION.pkg" | awk '{print $1}')"
+echo
