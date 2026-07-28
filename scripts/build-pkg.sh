@@ -158,6 +158,11 @@ count=$(plutil -convert json -o - "$OUT/component.plist" | python3 -c 'import js
 [ "$count" -ge 1 ] || { echo "component plist came back empty — staging is wrong" >&2; exit 1; }
 for i in $(seq 0 $((count - 1))); do
 	plutil -replace "$i.BundleIsRelocatable" -bool NO "$OUT/component.plist"
+	# Installer compares bundle versions and silently declines to overwrite one it
+	# reads as newer — writing a receipt anyway, so the install looks like it
+	# worked. 0.2.4 hit this: the installed bundle still said 1.0 from the
+	# MARKETING_VERSION bug, and 1.0 sorts above 0.2.4.
+	plutil -replace "$i.BundleIsVersionChecked" -bool NO "$OUT/component.plist"
 done
 plutil -convert json -o - "$OUT/component.plist" \
 	| python3 -c 'import json,sys; [print("    not relocatable:", c["RootRelativeBundlePath"]) for c in json.load(sys.stdin)]'
